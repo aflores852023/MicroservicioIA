@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from pymongo import MongoClient
 from flask_cors import CORS
 from llama_index.readers.mongodb import SimpleMongoReader
-from llama_index.core import VectorStoreIndex
+from llama_index.core import GPTVectorStoreIndex
 import os
 import logging
 
@@ -46,8 +46,8 @@ def query():
         docs = reader.load_data(database_name=DB_NAME, collection_name=COLLECTION_NAME)
         logging.info(f"📦 {len(docs)} documentos cargados desde MongoDB")
 
-        # === Crear índice temporal (VectorStoreIndex) ===
-        index = VectorStoreIndex.from_documents(docs)
+        # === Crear índice temporal (GPTVectorStoreIndex) ===
+        index = GPTVectorStoreIndex.from_documents(docs)
         query_engine = index.as_query_engine()
 
         response = query_engine.query(question)
