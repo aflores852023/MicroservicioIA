@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify
 from pymongo import MongoClient
-from llama_index.readers.mongodb import SimpleMongoReader
+from llama_index.readers.mongo import SimpleMongoReader
 from llama_index.core import VectorStoreIndex
+
 
 # from llama_index.llms.ollama import Ollama   # ⚠️ activalo solo si usás Ollama local
 import os

@@ -1,3 +1,5 @@
-flask
-llama-index
+Flask
 pymongo
+llama-index
+llama-index-readers-mongo
+
