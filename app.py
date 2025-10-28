@@ -1,9 +1,11 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
+from llama_index.core import Document
 from llama_index.readers.mongodb import SimpleMongoReader
 from llama_index import GPTVectorStoreIndex
 import os, time, logging
+import json
 
 # === CONFIG INICIAL ===
 app = Flask(__name__)
@@ -21,37 +23,61 @@ COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
 _index_cache = None
 _ready = False
+def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
+    """Prueba varias firmas de load_data() y cae a PyMongo si es necesario."""
+    reader = SimpleMongoReader(uri=mongo_uri)
+
+    # 1) Intento con posicionales (db, collection)
+    try:
+        return reader.load_data(db, coll)
+    except TypeError:
+        logging.warning("load_data(db, coll) no soportado en esta versión")
+
+    # 2) Intento con nombres 'database_name' y 'collection_name'
+    try:
+        return reader.load_data(database_name=db, collection_name=coll)
+    except TypeError:
+        logging.warning("load_data(database_name=, collection_name=) no soportado")
+
+    # 3) Intento con 'db_name' y 'collection_name'
+    try:
+        return reader.load_data(db_name=db, collection_name=coll)
+    except TypeError:
+        logging.warning("load_data(db_name=, collection_name=) no soportado")
+
+    # 4) Fallback manual con PyMongo → Document
+    logging.warning("⚠️ Usando fallback manual con PyMongo")
+    client = MongoClient(mongo_uri, serverSelectionTimeoutMS=8000)
+    client.admin.command("ping")
+    cur = client[db][coll].find({}, {"_id": 0})
+    docs = [Document(text=json.dumps(d, ensure_ascii=False)) for d in cur]
+    return docs
+
 
 # === FUNCIONES AUXILIARES ===
 def init_index():
+    from llama_index import GPTVectorStoreIndex  # mantengo tu versión 0.9.35
     global _index_cache, _ready
+
     if not MONGO_URI:
-        raise RuntimeError("⚠️ MONGO_URI no configurada")
+        raise RuntimeError("MONGO_URI no configurada")
 
     logging.info("🔌 Conectando a MongoDB...")
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
     client.admin.command("ping")
     logging.info("✅ Conexión Mongo OK")
 
-    # ✅ Cargar documentos - API actual de SimpleMongoReader (v0.1.x)
-    reader = SimpleMongoReader(uri=MONGO_URI)
-    docs = reader.load_data(database=DB_NAME, collection=COLLECTION_NAME)
+    docs = _load_docs_with_reader(MONGO_URI, DB_NAME, COLLECTION_NAME)
     logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
 
-    # Crear índice y cachearlo
     _index_cache = GPTVectorStoreIndex.from_documents(docs)
     _ready = True
     logging.info("🧱 Índice vectorial inicializado correctamente")
 
-
-    # Cargar documentos (limit opcional para rendimiento)
-    reader = SimpleMongoReader(uri=MONGO_URI)
-    docs = reader.load_data(
-    config={
-        "database": DB_NAME,
-        "collection": COLLECTION_NAME
-    }
-)
+def ensure_ready():
+    if not _ready:
+        logging.warning("⏳ Índice no listo, inicializando…")
+        init_index()
 
     logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
 
