@@ -1,11 +1,10 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
-from llama_index.core import Document
+from llama_index.core.schema import Document
 from llama_index.readers.mongodb import SimpleMongoReader
 from llama_index import GPTVectorStoreIndex
-import os, time, logging
-import json
+import os, time, logging, json
 
 # === CONFIG INICIAL ===
 app = Flask(__name__)
@@ -23,29 +22,28 @@ COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
 _index_cache = None
 _ready = False
+
+# === FUNCIONES ===
 def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
-    """Prueba varias firmas de load_data() y cae a PyMongo si es necesario."""
+    """Intenta distintas firmas de load_data(); si falla, usa PyMongo."""
     reader = SimpleMongoReader(uri=mongo_uri)
 
-    # 1) Intento con posicionales (db, collection)
     try:
         return reader.load_data(db, coll)
     except TypeError:
         logging.warning("load_data(db, coll) no soportado en esta versión")
 
-    # 2) Intento con nombres 'database_name' y 'collection_name'
     try:
         return reader.load_data(database_name=db, collection_name=coll)
     except TypeError:
         logging.warning("load_data(database_name=, collection_name=) no soportado")
 
-    # 3) Intento con 'db_name' y 'collection_name'
     try:
         return reader.load_data(db_name=db, collection_name=coll)
     except TypeError:
         logging.warning("load_data(db_name=, collection_name=) no soportado")
 
-    # 4) Fallback manual con PyMongo → Document
+    # 🔸 Fallback manual
     logging.warning("⚠️ Usando fallback manual con PyMongo")
     client = MongoClient(mongo_uri, serverSelectionTimeoutMS=8000)
     client.admin.command("ping")
@@ -54,9 +52,8 @@ def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
     return docs
 
 
-# === FUNCIONES AUXILIARES ===
 def init_index():
-    from llama_index import GPTVectorStoreIndex  # mantengo tu versión 0.9.35
+    """Crea el índice inicial desde Mongo."""
     global _index_cache, _ready
 
     if not MONGO_URI:
@@ -74,23 +71,22 @@ def init_index():
     _ready = True
     logging.info("🧱 Índice vectorial inicializado correctamente")
 
+
 def ensure_ready():
-    """Asegura que el índice esté listo antes de consultar."""
+    """Verifica que el índice esté disponible (reconstruye si está vacío)."""
     global _ready
-    if _index_cache is None or not _ready:
+    if not _ready:
         logging.warning("⏳ Índice no listo, inicializando…")
         init_index()
+    else:
+        logging.info("✅ Índice ya está inicializado y listo para consultas")
 
-    logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
 
-    # Crear índice y cachearlo
-    _index_cache = GPTVectorStoreIndex.from_documents(docs)
-    _ready = True
-    logging.info("🧱 Índice vectorial inicializado correctamente")
-
+# === ENDPOINTS ===
 @app.get("/")
 def home():
     return jsonify({"status": "ok", "message": "🤖 Microservicio IA activo"}), 200
+
 
 @app.get("/healthz")
 def healthz():
@@ -100,8 +96,10 @@ def healthz():
         "index_cached": _ready
     }), 200 if _ready else 503
 
+
 @app.post("/api/query")
 def query():
+    """Recibe una pregunta y la responde usando el índice vectorial."""
     global _index_cache
     start = time.time()
     try:
@@ -110,9 +108,7 @@ def query():
         if not question:
             return jsonify({"error": "Debe enviar un campo 'message'"}), 400
 
-        if not _ready or _index_cache is None:
-            logging.warning("⏳ Índice no listo, inicializando...")
-            init_index()
+        ensure_ready()
 
         response = _index_cache.as_query_engine().query(question)
         elapsed = round(time.time() - start, 2)
@@ -129,6 +125,7 @@ def query():
             "response": "⚠️ No pude procesar tu consulta.",
             "error": str(e)
         }), 500
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
