@@ -35,7 +35,13 @@ def init_index():
 
     # Cargar documentos (limit opcional para rendimiento)
     reader = SimpleMongoReader(uri=MONGO_URI)
-    docs = reader.load_data(database_name=DB_NAME, collection_name=COLLECTION_NAME)
+    docs = reader.load_data(
+    config={
+        "database": DB_NAME,
+        "collection": COLLECTION_NAME
+    }
+)
+
     logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
 
     # Crear índice y cachearlo
