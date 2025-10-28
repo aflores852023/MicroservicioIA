@@ -1,16 +1,12 @@
-# --- Flask core ---
+﻿
 Flask==3.0.3
 flask-cors==6.0.1
 pymongo==4.6.3
-
-# --- LlamaIndex stack ESTABLE compatible ---
 llama-index==0.10.1
 llama-index-core==0.10.1
 llama-index-readers-mongodb==0.1.2
-llama-index-llms-openai==0.1.6  # ✅ versión que usa la API anterior compatible
+llama-index-llms-openai==0.1.6
 openai==1.3.8
-
-# --- Utilitarios ---
 pandas==2.0.3
 numpy==1.26.4
 requests==2.31.0
