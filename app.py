@@ -22,10 +22,12 @@ COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
 _index_cache = None
 _ready = False
+_last_init_attempt = 0  # ⏱️ evita inicializaciones múltiples seguidas
 
-# === FUNCIONES ===
+
+# === CARGA DE DOCUMENTOS ===
 def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
-    """Intenta distintas firmas de load_data(); si falla, usa PyMongo."""
+    """Prueba varias firmas de load_data() y cae a PyMongo si es necesario."""
     reader = SimpleMongoReader(uri=mongo_uri)
 
     try:
@@ -43,7 +45,7 @@ def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
     except TypeError:
         logging.warning("load_data(db_name=, collection_name=) no soportado")
 
-    # 🔸 Fallback manual
+    # 🔸 Fallback manual con PyMongo
     logging.warning("⚠️ Usando fallback manual con PyMongo")
     client = MongoClient(mongo_uri, serverSelectionTimeoutMS=8000)
     client.admin.command("ping")
@@ -52,28 +54,40 @@ def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
     return docs
 
 
-def init_index():
-    """Crea el índice inicial desde Mongo."""
-    global _index_cache, _ready
+# === INDEXACIÓN ===
+def init_index(force=False):
+    """Inicializa o reconstruye el índice vectorial."""
+    global _index_cache, _ready, _last_init_attempt
+
+    # Previene reintentos constantes si Render está despertando
+    if not force and time.time() - _last_init_attempt < 30:
+        logging.warning("⏳ Esperando antes de reintentar la inicialización del índice.")
+        return
+    _last_init_attempt = time.time()
 
     if not MONGO_URI:
         raise RuntimeError("MONGO_URI no configurada")
 
-    logging.info("🔌 Conectando a MongoDB...")
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
-    client.admin.command("ping")
-    logging.info("✅ Conexión Mongo OK")
+    try:
+        logging.info("🔌 Conectando a MongoDB...")
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
+        client.admin.command("ping")
+        logging.info("✅ Conexión Mongo OK")
 
-    docs = _load_docs_with_reader(MONGO_URI, DB_NAME, COLLECTION_NAME)
-    logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
+        docs = _load_docs_with_reader(MONGO_URI, DB_NAME, COLLECTION_NAME)
+        logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
 
-    _index_cache = GPTVectorStoreIndex.from_documents(docs)
-    _ready = True
-    logging.info("🧱 Índice vectorial inicializado correctamente")
+        _index_cache = GPTVectorStoreIndex.from_documents(docs)
+        _ready = True
+        logging.info("🧱 Índice vectorial inicializado correctamente")
+
+    except Exception as e:
+        _ready = False
+        logging.error(f"⚠️ Fallo inicializando índice: {e}")
 
 
 def ensure_ready():
-    """Verifica que el índice esté disponible (reconstruye si está vacío)."""
+    """Verifica que el índice esté disponible; si Render está “despertando”, evita errores."""
     global _ready
     if not _ready:
         logging.warning("⏳ Índice no listo, inicializando…")
@@ -90,6 +104,7 @@ def home():
 
 @app.get("/healthz")
 def healthz():
+    """Endpoint para chequeo automático de Render o monitor."""
     return jsonify({
         "ok": _ready,
         "mongo_uri_configured": bool(MONGO_URI),
@@ -99,16 +114,27 @@ def healthz():
 
 @app.post("/api/query")
 def query():
-    """Recibe una pregunta y la responde usando el índice vectorial."""
+    """Recibe una pregunta y responde con el índice vectorial."""
     global _index_cache
     start = time.time()
+
     try:
         data = request.get_json(silent=True) or {}
         question = (data.get("message") or "").strip()
         if not question:
             return jsonify({"error": "Debe enviar un campo 'message'"}), 400
 
-        ensure_ready()
+        if not _ready or _index_cache is None:
+            logging.warning("⏳ Modo standby detectado: reactivando índice...")
+            init_index()
+
+            # Si todavía no está listo → mensaje temporal
+            if not _ready:
+                logging.warning("🕐 Render en standby — devolviendo respuesta temporal.")
+                return jsonify({
+                    "response": "🤖 El asistente se está despertando... intentá nuevamente en unos segundos.",
+                    "standby": True
+                }), 503
 
         response = _index_cache.as_query_engine().query(question)
         elapsed = round(time.time() - start, 2)
@@ -127,6 +153,7 @@ def query():
         }), 500
 
 
+# === MAIN ===
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
     logging.info(f"🚀 Iniciando Microservicio IA en puerto {port}")
