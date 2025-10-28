@@ -75,7 +75,9 @@ def init_index():
     logging.info("🧱 Índice vectorial inicializado correctamente")
 
 def ensure_ready():
-    if not _ready:
+    """Asegura que el índice esté listo antes de consultar."""
+    global _ready
+    if _index_cache is None or not _ready:
         logging.warning("⏳ Índice no listo, inicializando…")
         init_index()
 
