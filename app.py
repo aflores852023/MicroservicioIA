@@ -19,49 +19,45 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 MONGO_URI = os.getenv("MONGO_URI", "").strip()
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
 COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
 _index_cache = None
 _ready = False
-_last_init_attempt = 0  # ⏱️ evita inicializaciones múltiples seguidas
+_offline_mode = False
+_last_init_attempt = 0  # evita inicializaciones múltiples
 
 
 # === CARGA DE DOCUMENTOS ===
 def _load_docs_with_reader(mongo_uri: str, db: str, coll: str):
-    """Prueba varias firmas de load_data() y cae a PyMongo si es necesario."""
+    """Carga documentos desde Mongo, probando distintas versiones de llama_index."""
     reader = SimpleMongoReader(uri=mongo_uri)
-
     try:
         return reader.load_data(db, coll)
     except TypeError:
-        logging.warning("load_data(db, coll) no soportado en esta versión")
-
+        logging.warning("load_data(db, coll) no soportado")
     try:
         return reader.load_data(database_name=db, collection_name=coll)
     except TypeError:
         logging.warning("load_data(database_name=, collection_name=) no soportado")
-
     try:
         return reader.load_data(db_name=db, collection_name=coll)
     except TypeError:
         logging.warning("load_data(db_name=, collection_name=) no soportado")
 
-    # 🔸 Fallback manual con PyMongo
+    # Fallback manual con PyMongo → Document
     logging.warning("⚠️ Usando fallback manual con PyMongo")
     client = MongoClient(mongo_uri, serverSelectionTimeoutMS=8000)
-    client.admin.command("ping")
     cur = client[db][coll].find({}, {"_id": 0})
-    docs = [Document(text=json.dumps(d, ensure_ascii=False)) for d in cur]
-    return docs
+    return [Document(text=json.dumps(d, ensure_ascii=False)) for d in cur]
 
 
 # === INDEXACIÓN ===
 def init_index(force=False):
     """Inicializa o reconstruye el índice vectorial."""
-    global _index_cache, _ready, _last_init_attempt
+    global _index_cache, _ready, _offline_mode, _last_init_attempt
 
-    # Previene reintentos constantes si Render está despertando
     if not force and time.time() - _last_init_attempt < 30:
-        logging.warning("⏳ Esperando antes de reintentar la inicialización del índice.")
+        logging.warning("⏳ Esperando antes de reintentar inicialización.")
         return
     _last_init_attempt = time.time()
 
@@ -77,36 +73,49 @@ def init_index(force=False):
         docs = _load_docs_with_reader(MONGO_URI, DB_NAME, COLLECTION_NAME)
         logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
 
-        _index_cache = GPTVectorStoreIndex.from_documents(docs)
+        if OPENAI_KEY:
+            logging.info("🤖 Inicializando índice con OpenAI (modo online)")
+            _index_cache = GPTVectorStoreIndex.from_documents(docs)
+            _offline_mode = False
+        else:
+            logging.warning("⚠️ No hay OPENAI_API_KEY — iniciando en modo OFFLINE")
+            _index_cache = None
+            _offline_mode = True
+
         _ready = True
-        logging.info("🧱 Índice vectorial inicializado correctamente")
+        logging.info("🧱 Índice inicializado correctamente")
 
     except Exception as e:
         _ready = False
+        _offline_mode = True
         logging.error(f"⚠️ Fallo inicializando índice: {e}")
 
 
 def ensure_ready():
-    """Verifica que el índice esté disponible; si Render está “despertando”, evita errores."""
+    """Verifica si el índice está inicializado."""
     global _ready
     if not _ready:
         logging.warning("⏳ Índice no listo, inicializando…")
         init_index()
     else:
-        logging.info("✅ Índice ya está inicializado y listo para consultas")
+        logging.info("✅ Índice ya está listo")
 
 
 # === ENDPOINTS ===
 @app.get("/")
 def home():
-    return jsonify({"status": "ok", "message": "🤖 Microservicio IA activo"}), 200
+    return jsonify({
+        "status": "ok",
+        "message": "🤖 Microservicio IA activo",
+        "mode": "offline" if _offline_mode else "online"
+    }), 200
 
 
 @app.get("/healthz")
 def healthz():
-    """Endpoint para chequeo automático de Render o monitor."""
     return jsonify({
         "ok": _ready,
+        "offline_mode": _offline_mode,
         "mongo_uri_configured": bool(MONGO_URI),
         "index_cached": _ready
     }), 200 if _ready else 503
@@ -114,36 +123,50 @@ def healthz():
 
 @app.post("/api/query")
 def query():
-    """Recibe una pregunta y responde con el índice vectorial."""
+    """Recibe una pregunta y responde usando IA o modo offline."""
     global _index_cache
     start = time.time()
 
-    try:
-        data = request.get_json(silent=True) or {}
-        question = (data.get("message") or "").strip()
-        if not question:
-            return jsonify({"error": "Debe enviar un campo 'message'"}), 400
+    data = request.get_json(silent=True) or {}
+    question = (data.get("message") or "").strip()
+    if not question:
+        return jsonify({"error": "Debe enviar un campo 'message'"}), 400
 
-        if not _ready or _index_cache is None:
-            logging.warning("⏳ Modo standby detectado: reactivando índice...")
-            init_index()
-
-            # Si todavía no está listo → mensaje temporal
-            if not _ready:
-                logging.warning("🕐 Render en standby — devolviendo respuesta temporal.")
-                return jsonify({
-                    "response": "🤖 El asistente se está despertando... intentá nuevamente en unos segundos.",
-                    "standby": True
-                }), 503
-
-        response = _index_cache.as_query_engine().query(question)
-        elapsed = round(time.time() - start, 2)
-        logging.info(f"✅ Consulta procesada en {elapsed}s")
-
+    if not _ready:
+        logging.warning("💤 Microservicio IA en standby — devolviendo aviso temporal.")
         return jsonify({
-            "response": str(response),
-            "elapsed": elapsed
-        })
+            "response": "🕐 El asistente se está reactivando, intentá nuevamente en unos segundos.",
+            "standby": True
+        }), 503
+
+    try:
+        if not _offline_mode and _index_cache:
+            response = _index_cache.as_query_engine().query(question)
+            elapsed = round(time.time() - start, 2)
+            logging.info(f"✅ Consulta procesada con IA en {elapsed}s")
+            return jsonify({
+                "response": str(response),
+                "elapsed": elapsed,
+                "mode": "online"
+            })
+        else:
+            # === MODO OFFLINE ===
+            logging.info("🧭 Procesando consulta en modo OFFLINE")
+            client = MongoClient(MONGO_URI)
+            collection = client[DB_NAME][COLLECTION_NAME]
+            results = list(collection.find({"name": {"$regex": question, "$options": "i"}}, {"_id": 0}))
+            if results:
+                preview = results[:3]  # muestra los primeros
+                return jsonify({
+                    "response": f"🔍 Encontré {len(results)} coincidencias relacionadas con '{question}'.",
+                    "examples": preview,
+                    "mode": "offline"
+                })
+            else:
+                return jsonify({
+                    "response": f"🤖 No encontré coincidencias locales para '{question}'.",
+                    "mode": "offline"
+                })
 
     except Exception as e:
         logging.error(f"❌ Error procesando /api/query: {e}")
