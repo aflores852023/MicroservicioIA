@@ -4,6 +4,8 @@ from pymongo import MongoClient
 from llama_index.core.schema import Document
 from llama_index.readers.mongodb import SimpleMongoReader
 from llama_index import GPTVectorStoreIndex
+from llama_index import ServiceContext, set_global_service_context
+from llama_index.llms.openai import OpenAI
 import os, time, logging, json
 
 # === CONFIG INICIAL ===
@@ -15,6 +17,11 @@ CORS(app, resources={r"/api/*": {"origins": [
 ]}}, supports_credentials=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+llm = OpenAI(model="gpt-3.5-turbo", temperature=0)
+service_context = ServiceContext.from_defaults(llm=llm)
+set_global_service_context(service_context)
+
 
 MONGO_URI = os.getenv("MONGO_URI", "").strip()
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
