@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
-from llama_index.core import Document, GPTVectorStoreIndex, ServiceContext, set_global_service_context
+from llama_index.core import Document, ServiceContext, set_global_service_context
+from llama_index.core.indices.vector_store import GPTVectorStoreIndex
 from llama_index.readers.mongodb import SimpleMongoReader
 from llama_index.llms.openai import OpenAI
 import os, time, logging, json
