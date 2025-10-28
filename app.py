@@ -33,6 +33,17 @@ def init_index():
     client.admin.command("ping")
     logging.info("✅ Conexión Mongo OK")
 
+    # ✅ Cargar documentos - API actual de SimpleMongoReader (v0.1.x)
+    reader = SimpleMongoReader(uri=MONGO_URI)
+    docs = reader.load_data(database=DB_NAME, collection=COLLECTION_NAME)
+    logging.info(f"📦 {len(docs)} documentos cargados desde {DB_NAME}.{COLLECTION_NAME}")
+
+    # Crear índice y cachearlo
+    _index_cache = GPTVectorStoreIndex.from_documents(docs)
+    _ready = True
+    logging.info("🧱 Índice vectorial inicializado correctamente")
+
+
     # Cargar documentos (limit opcional para rendimiento)
     reader = SimpleMongoReader(uri=MONGO_URI)
     docs = reader.load_data(
