@@ -1,19 +1,8 @@
-import os, time, logging, json
-
-# === 🧹 Limpieza temprana de variables de entorno (Render inyecta proxies) ===
-for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
-    if proxy_var in os.environ:
-        print(f"🧹 Eliminando {proxy_var} del entorno Render para evitar bug con openai")
-        del os.environ[proxy_var]
-
-# ✅ Luego importás el resto
+import os, time, logging, json, requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
-from openai import OpenAI
-import httpx
 
-# === CONFIG INICIAL ===
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": [
     "https://systemstock.vercel.app",
@@ -24,65 +13,56 @@ CORS(app, resources={r"/api/*": {"origins": [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-MONGO_URI = os.getenv("MONGO_URI", "").strip()
+USE_OLLAMA = os.getenv("USE_OLLAMA", "true").lower() == "true"  # 👈 por defecto true
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+MONGO_URI = os.getenv("MONGO_URI", "")
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
 COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
-# === 🔧 Cliente httpx explícito sin proxies ===
-transport = httpx.HTTPTransport(proxy=None)
-http_client = httpx.Client(transport=transport, timeout=30.0)
-
-# 👇 Cliente OpenAI con http_client seguro
-client_ai = OpenAI(api_key=OPENAI_KEY, http_client=http_client)
-_ready = True
-
-
 @app.get("/")
 def home():
-    """Endpoint base de salud."""
     return jsonify({
         "status": "ok",
         "message": "🤖 Microservicio IA activo",
-        "mode": "online" if OPENAI_KEY else "offline"
+        "mode": "ollama" if USE_OLLAMA else "openai"
     }), 200
-
 
 @app.post("/api/query")
 def query():
-    """Procesa consultas vía OpenAI o búsqueda Mongo."""
-    start = time.time()
     data = request.get_json(silent=True) or {}
     question = (data.get("message") or "").strip()
-
     if not question:
         return jsonify({"error": "Debe enviar un campo 'message'"}), 400
 
     try:
-        if OPENAI_KEY:
-            logging.info("🤖 Procesando consulta con OpenAI moderno (sin proxy)")
+        if USE_OLLAMA:
+            logging.info(f"🧠 Usando Ollama local con modelo '{OLLAMA_MODEL}'")
+            r = requests.post("http://localhost:11434/api/generate",
+                              json={"model": OLLAMA_MODEL, "prompt": question})
+            if r.status_code == 200:
+                text = r.json().get("response", "")
+                return jsonify({"response": text, "mode": "ollama"})
+            else:
+                raise Exception(f"Ollama error: {r.text}")
+
+        elif OPENAI_KEY:
+            from openai import OpenAI
+            client_ai = OpenAI(api_key=OPENAI_KEY)
             response = client_ai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": question}],
                 temperature=0.3,
             )
             answer = response.choices[0].message.content
-            elapsed = round(time.time() - start, 2)
-            return jsonify({
-                "response": answer,
-                "elapsed": elapsed,
-                "mode": "online"
-            })
+            return jsonify({"response": answer, "mode": "online"})
+
         else:
             # fallback: búsqueda Mongo
-            mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
-            results = list(
-                mongo[DB_NAME][COLLECTION_NAME].find(
-                    {"name": {"$regex": question, "$options": "i"}},
-                    {"_id": 0}
-                )
-            )
+            mongo = MongoClient(MONGO_URI)
+            results = list(mongo[DB_NAME][COLLECTION_NAME]
+                           .find({"name": {"$regex": question, "$options": "i"}}, {"_id": 0}))
             return jsonify({
-                "response": f"🔍 {len(results)} coincidencias locales para '{question}'.",
+                "response": f"🔍 {len(results)} coincidencias locales.",
                 "examples": results[:3],
                 "mode": "offline"
             })
@@ -90,7 +70,6 @@ def query():
     except Exception as e:
         logging.error(f"❌ Error en /api/query: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))
