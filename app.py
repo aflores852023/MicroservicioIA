@@ -36,16 +36,11 @@ def query():
 
     try:
         if USE_OLLAMA:
-            logging.info(f"🧠 Usando Ollama local con modelo '{OLLAMA_MODEL}'")
-            r = requests.post("http://localhost:11434/api/generate",
-                              json={"model": OLLAMA_MODEL, "prompt": question})
-            if r.status_code == 200:
-                text = r.json().get("response", "")
-                return jsonify({"response": text, "mode": "ollama"})
-            else:
-                raise Exception(f"Ollama error: {r.text}")
+            # 🔒 Deshabilitado en Render
+            logging.warning("⚠️ Ollama no disponible en Render. Modo offline forzado.")
+            USE_OLLAMA = False
 
-        elif OPENAI_KEY:
+        if OPENAI_KEY and not USE_OLLAMA:
             from openai import OpenAI
             client_ai = OpenAI(api_key=OPENAI_KEY)
             response = client_ai.chat.completions.create(
@@ -56,16 +51,26 @@ def query():
             answer = response.choices[0].message.content
             return jsonify({"response": answer, "mode": "online"})
 
+        # === 🧠 MODO OFFLINE (por defecto en Render) ===
+        mongo = MongoClient(MONGO_URI)
+        results = list(
+            mongo[DB_NAME][COLLECTION_NAME].find(
+                {"name": {"$regex": question, "$options": "i"}},
+                {"_id": 0}
+            )
+        )
+
+        # Respuesta básica si no hay coincidencias
+        if results:
+            resp = f"🔍 Encontradas {len(results)} coincidencias en base local."
         else:
-            # fallback: búsqueda Mongo
-            mongo = MongoClient(MONGO_URI)
-            results = list(mongo[DB_NAME][COLLECTION_NAME]
-                           .find({"name": {"$regex": question, "$options": "i"}}, {"_id": 0}))
-            return jsonify({
-                "response": f"🔍 {len(results)} coincidencias locales.",
-                "examples": results[:3],
-                "mode": "offline"
-            })
+            resp = "🤖 Estoy en modo offline. No tengo coincidencias locales para esa búsqueda."
+
+        return jsonify({
+            "response": resp,
+            "examples": results[:3],
+            "mode": "offline"
+        })
 
     except Exception as e:
         logging.error(f"❌ Error en /api/query: {e}")
