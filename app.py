@@ -19,6 +19,12 @@ MONGO_URI = os.getenv("MONGO_URI", "").strip()
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
 COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
+# === Limpieza de variables de proxy del entorno (Render las define por defecto) ===
+for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
+    if proxy_var in os.environ:
+        logging.warning(f"🧹 Eliminando variable de entorno {proxy_var} para evitar conflicto con OpenAI SDK")
+        del os.environ[proxy_var]
+
 # 👇 Inicializa cliente OpenAI moderno
 client_ai = OpenAI(api_key=OPENAI_KEY)
 _ready = True
