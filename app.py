@@ -1,8 +1,17 @@
+import os, time, logging, json
+
+# === 🧹 Limpieza temprana de variables de entorno (Render inyecta proxies) ===
+for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
+    if proxy_var in os.environ:
+        print(f"🧹 Eliminando {proxy_var} del entorno Render para evitar bug con openai")
+        del os.environ[proxy_var]
+
+# ✅ Luego importás el resto
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
-from openai import OpenAI  # ✅ nuevo SDK oficial
-import os, time, logging, json
+from openai import OpenAI  # 👈 ahora sí, sin interferencias
+import httpx
 
 # === CONFIG INICIAL ===
 app = Flask(__name__)
@@ -19,11 +28,9 @@ MONGO_URI = os.getenv("MONGO_URI", "").strip()
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
 COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
-# === Limpieza de variables de proxy del entorno (Render las define por defecto) ===
-for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
-    if proxy_var in os.environ:
-        logging.warning(f"🧹 Eliminando variable de entorno {proxy_var} para evitar conflicto con OpenAI SDK")
-        del os.environ[proxy_var]
+# 👇 Cliente OpenAI sin proxies forzados
+http_client = httpx.Client(proxies=None, timeout=30)
+client_ai = OpenAI(api_key=OPENAI_KEY, http_client=http_client)
 
 # 👇 Inicializa cliente OpenAI moderno
 client_ai = OpenAI(api_key=OPENAI_KEY)
