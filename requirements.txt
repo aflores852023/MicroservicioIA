@@ -1,12 +1,6 @@
 ﻿Flask==3.0.3
 flask-cors==6.0.1
 pymongo==4.6.3
-llama-index==0.10.68
-llama-index-core==0.10.68
-llama-index-llms-openai==0.1.28
-llama-index-readers-mongodb==0.1.4
-openai==1.40.3
-pandas==2.0.3
-numpy==1.26.4
+openai==1.41.0
 requests==2.31.0
 setuptools==69.5.1
