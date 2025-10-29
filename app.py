@@ -1,11 +1,12 @@
 import os, time, logging, json
 
-# === Limpieza temprana de variables de entorno (Render inyecta proxies) ===
+# === 🧹 Limpieza temprana de variables de entorno (Render inyecta proxies) ===
 for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
     if proxy_var in os.environ:
         print(f"🧹 Eliminando {proxy_var} del entorno Render para evitar bug con openai")
         del os.environ[proxy_var]
 
+# ✅ Luego importás el resto
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -27,14 +28,18 @@ MONGO_URI = os.getenv("MONGO_URI", "").strip()
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
 COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
-# 👇 Cliente OpenAI blindado: ignora completamente las variables de entorno
-http_client = httpx.Client(trust_env=False, timeout=30)
+# === 🔧 Cliente httpx explícito sin proxies ===
+transport = httpx.HTTPTransport(proxy=None)
+http_client = httpx.Client(transport=transport, timeout=30.0)
+
+# 👇 Cliente OpenAI con http_client seguro
 client_ai = OpenAI(api_key=OPENAI_KEY, http_client=http_client)
 _ready = True
 
 
 @app.get("/")
 def home():
+    """Endpoint base de salud."""
     return jsonify({
         "status": "ok",
         "message": "🤖 Microservicio IA activo",
@@ -54,7 +59,7 @@ def query():
 
     try:
         if OPENAI_KEY:
-            logging.info("🤖 Procesando consulta con OpenAI moderno (Render)")
+            logging.info("🤖 Procesando consulta con OpenAI moderno (sin proxy)")
             response = client_ai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": question}],
@@ -68,6 +73,7 @@ def query():
                 "mode": "online"
             })
         else:
+            # fallback: búsqueda Mongo
             mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=8000)
             results = list(
                 mongo[DB_NAME][COLLECTION_NAME].find(
