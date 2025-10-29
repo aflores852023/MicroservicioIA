@@ -10,7 +10,7 @@ for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pymongo import MongoClient
-from openai import OpenAI  # 👈 ahora sí, sin interferencias
+from openai import OpenAI  # 👈 SDK moderno
 import httpx
 
 # === CONFIG INICIAL ===
@@ -28,11 +28,7 @@ MONGO_URI = os.getenv("MONGO_URI", "").strip()
 DB_NAME = os.getenv("MONGO_DB", "system-stock")
 COLLECTION_NAME = os.getenv("MONGO_COLLECTION", "articles")
 
-# 👇 Cliente OpenAI sin proxies forzados
-http_client = httpx.Client(proxies=None, timeout=30)
-client_ai = OpenAI(api_key=OPENAI_KEY, http_client=http_client)
-
-# 👇 Inicializa cliente OpenAI moderno
+# 👇 Cliente OpenAI limpio (sin proxies ni duplicaciones)
 client_ai = OpenAI(api_key=OPENAI_KEY)
 _ready = True
 
